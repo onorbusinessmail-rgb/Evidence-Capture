@@ -1,0 +1,183 @@
+﻿# Evidence-Capture Version 2.0.0 機能拡張仕様書
+
+## 1. ハイブリッド・バックグラウンド反映システム
+
+ExcelのUIフリーズを回避しつつ、リアルタイムな反映を実現するコアロジックです。
+
+### 動作メカニズム
+
+* **バイナリ直接操作**: 書き込み処理の主体を OLE (COM) から `Excelize` ライブラリへ移行。Excelの描画エンジンを介さず、`.xlsx` ファイルを直接バイナリレベルで更新します。
+* **シームレス・リロード**: 書き込み完了後、Win32 API を通じてExcelへ「ファイル更新通知」を送信。ユーザーがExcelを閉じることなく、最新の証跡がセルに出現する挙動を実現します。
+
+### 異常系ハンドリング（キューイング実装）
+
+* **ロック競合の解決**: Excelがファイルを排他ロックしている場合、反映処理を内部の「書き込みキュー」にスタックします。
+* **リトライ・オーケストレーター**: 1秒間隔でファイルロックの解放を監視。書き込み成功時に一括、または順次反映し、ツール上のステータスバーで「反映待ち件数」を可視化します。
+
+## 2. リアルタイム・プレビュー・ポップアップ
+
+撮影が成功したことを視覚的にフィードバックし、手戻りを防ぐための通知機能です。
+
+### 表示仕様
+
+* **オーバーレイ表示**: スクリーン右下（または任意の隅）に、撮影した画像のサムネイルをフローティングウィンドウで表示します。
+* **透過・非干渉**: 他のウィンドウ操作を妨げないよう「マウス透過設定（WS_EX_TRANSPARENT）」を適用し、ポップアップが表示されていても背後の作業を継続可能にします。
+
+### 制御パラメータ
+
+* **表示持続時間**: デフォルト3秒。設定画面より 1〜10秒の範囲で変更可能。
+* **自動消去**: 指定時間経過後、フェードアウトしながら自動的に破棄されます。
+
+## 3. 撮影支援・最適化機能（新規追加）
+
+### 3.1. 透過型「グリッド・ガイド」オーバーレイ
+
+キャプチャ範囲を正確に把握し、サイズ調整の手間をさらに減らす機能です。
+
+* **仕様**: キャプチャ対象のウィンドウ上に、Excelのセル比率（4:3や16:9など）に合わせたガイド枠をうっすらと表示します。
+* **メリット**: 「撮ってみたら文字が小さすぎて読めない」「余白が多すぎる」といったミスを撮影前に防げます。
+* **実装ポイント**: 透明な最前面ウィンドウ（Layered Window）を作成し、GDIで枠線を描画します。
+
+### 3.2. 環境適応型「スマート・コンプレッサー」
+
+1GB以下の空き容量という極限状態でも、Excelの肥大化を防ぐ機能です。
+
+* **仕様**: 画像をExcelに挿入する直前に、解像度を維持したままメタデータを削除し、色深度を最適化してファイルサイズを軽量化します。
+* **メリット**: 数百枚貼ってもExcelが重くならず、ディスク容量不足による保存エラーを回避できます。
+* **実装ポイント**: 標準の `image/draw` パッケージや、Go製の軽量な画像圧縮ライブラリを使い、メモリ内で変換してから `Excelize` に渡します。
+
+### 3.3. 「ステルス・ホットキー」カスタマイズ
+
+標準的なショートカットキー（PrintScreenなど）が資産管理ソフトや他の業務アプリに奪われている環境への対策です。
+
+* **仕様**: `Alt + Shift + Z` など、OS標準とかぶりにくい独自の組み合わせをユーザーが自由に設定できるようにします。
+* **メリット**: ツールが反応しないストレスを排除し、独自の操作感を提供できます。
+* **実装ポイント**: `RegisterHotKey` APIを使用し、設定ファイル（.ini）からキーコードを動的に読み込みます。
+
+## 4. 設定画面（UI）の拡張
+
+ユーザーが環境や好みに合わせて挙動をカスタマイズできるよう、以下の項目を追加します。
+
+### 反映・通知設定セクション
+
+1. **ポップアップ表示の有効化 (Checkbox)**:
+* ON：撮影成功時に右下にサムネイルを表示。
+* OFF：通知なし（バックグラウンド処理のみ）。
+
+
+2. **表示持続時間 (Input Form)**:
+* ポップアップが消えるまでの時間を「秒」で指定。
+
+
+3. **待機時間連動モード (Checkbox)**:
+* ON：ポップアップが表示されている間は、次のスクショ入力をロック（連写によるミス防止）。
+* OFF：反映をバックグラウンドで行い、連続撮影を許可。
+
+
+4. **反映通知ステータス (Display)**:
+* 現在の「書き込みキュー」の状態を表示（例：`反映待ち: 0件 / 正常`）。
+
+
+
+## 5. 導入メリットまとめ
+
+| 課題 | 解決アプローチ | 導入後の効果 |
+| --- | --- | --- |
+| **Excelのフリーズ** | Excelizeによる非同期バイナリ書き込み | セル入力中や重いファイルでもツールが止まらない。 |
+| **撮れたか不安** | プレビューポップアップの即時表示 | Excelを確認しに戻る手間が省け、作業リズムが維持される。 |
+| **ファイルの破損** | 書き込み成否のキュー管理とリトライ | 強制終了や競合によるファイル破損リスクを極小化。 |
+| **操作の競合** | Win32 APIによるアクティブセル動的取得 | ユーザーが選択している場所に正確に、かつ静かに貼り付け。 |
+
+---
+
+---
+
+# Evidence-Capture Version 2.0.0 Feature Expansion Specification
+
+## 1. Hybrid Background Reflection System
+
+The core logic that achieves real-time reflection while avoiding Excel UI freezes.
+
+### Operating Mechanism
+
+* **Direct Binary Manipulation**: Shifts the main writing process from OLE (COM) to the `Excelize` library. Updates the `.xlsx` file directly at the binary level, bypassing Excel's rendering engine.
+* **Seamless Reload**: Sends a "file update notification" to Excel via the Win32 API immediately after the write is complete. This allows the latest evidence to appear in the cell without the user having to close Excel.
+
+### Exception Handling (Queueing Implementation)
+
+* **Resolving Lock Contention**: If Excel has an exclusive lock on the file, the reflection process is stacked in an internal "write queue."
+* **Retry Orchestrator**: Monitors the release of the file lock at 1-second intervals. Upon a successful write, it reflects the queue in bulk or sequentially, visualizing the "Pending Reflections" on the tool's status bar.
+
+## 2. Real-Time Preview Popup
+
+A notification feature that provides visual feedback of a successful capture, preventing rework.
+
+### Display Specifications
+
+* **Overlay Display**: Displays a thumbnail of the captured image in a floating window in the bottom right (or any specified corner) of the screen.
+* **Transparent & Non-Interfering**: Applies mouse transparency (`WS_EX_TRANSPARENT`) so it does not obstruct other window operations, allowing background work to continue even while the popup is visible.
+
+### Control Parameters
+
+* **Display Duration**: Default is 3 seconds. Configurable between 1 and 10 seconds from the settings screen.
+* **Auto-Dismiss**: Automatically destroys itself with a fade-out effect after the specified duration elapses.
+
+## 3. Capture Support & Optimization Features (New Additions)
+
+### 3.1. Transparent "Grid Guide" Overlay
+
+A feature to accurately grasp the capture area, further reducing the effort needed for size adjustments.
+
+* **Specification**: Displays a faint guide frame matching Excel's cell ratio (e.g., 4:3 or 16:9) over the target window to be captured.
+* **Benefit**: Prevents errors prior to capturing, such as "the text is too small to read" or "there's too much whitespace."
+* **Implementation Point**: Creates a transparent top-most window (Layered Window) and draws the frame using GDI.
+
+### 3.2. Environment-Adaptive "Smart Compressor"
+
+A feature to prevent Excel bloat even in extreme conditions where free space is less than 1GB.
+
+* **Specification**: Strips metadata while maintaining resolution and optimizes color depth to reduce file size immediately before inserting the image into Excel.
+* **Benefit**: Prevents Excel from becoming sluggish even after inserting hundreds of images, avoiding save errors due to insufficient disk space.
+* **Implementation Point**: Utilizes the standard `image/draw` package or a lightweight Go-based image compression library to convert in-memory before passing it to `Excelize`.
+
+### 3.3. "Stealth Hotkey" Customization
+
+A countermeasure for environments where standard shortcut keys (like PrintScreen) are hijacked by asset management software or other business applications.
+
+* **Specification**: Allows users to freely set unique combinations (e.g., `Alt + Shift + Z`) that are unlikely to conflict with OS defaults.
+* **Benefit**: Eliminates the frustration of unresponsive tools and provides a customized operating feel.
+* **Implementation Point**: Uses the `RegisterHotKey` API to dynamically load key codes from the configuration file (`.ini`).
+
+## 4. Settings Screen (UI) Expansion
+
+Adds the following items so users can customize the behavior to their environment and preferences.
+
+### Reflection & Notification Settings Section
+
+1. **Enable Popup Display (Checkbox)**:
+* ON: Displays a thumbnail in the bottom right upon successful capture.
+* OFF: No notification (background processing only).
+
+
+2. **Display Duration (Input Form)**:
+* Specifies the time in seconds until the popup disappears.
+
+
+3. **Wait Time Sync Mode (Checkbox)**:
+* ON: Locks the next screenshot input while the popup is visible (prevents mistakes from rapid capturing).
+* OFF: Performs reflection in the background and allows continuous capturing.
+
+
+4. **Reflection Notification Status (Display)**:
+* Shows the current state of the "write queue" (e.g., `Pending: 0 / Normal`).
+
+
+
+## 5. Summary of Implementation Benefits
+
+| Challenge | Solution Approach | Effect After Implementation |
+| --- | --- | --- |
+| **Excel Freezing** | Asynchronous binary writing via `Excelize` | Tool does not halt even during cell input or with heavy files. |
+| **Uncertainty of Capture** | Immediate display of preview popup | Eliminates the need to switch back to Excel to check, maintaining work rhythm. |
+| **File Corruption** | Queue management and retry for write success/failure | Minimizes the risk of file corruption from forced quits or conflicts. |
+| **Operation Conflicts** | Dynamic active cell acquisition via Win32 API | Pastes accurately and silently into the user's selected location. |
