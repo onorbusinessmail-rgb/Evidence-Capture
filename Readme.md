@@ -1,6 +1,6 @@
 # Evidence-Capture
 
-[English Version is here](README_EN.md)
+[English Version is here](README_En.md)
 
 ## 🔥 なぜこれを作ったか
 
